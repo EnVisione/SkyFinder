@@ -56,6 +56,7 @@ public final class HypixelLocationDetector {
 
     private static volatile boolean inSkyblock  = false;
     private static volatile boolean inCatacombs = false;
+    private static volatile boolean dungeonRunning = false;  // see below — only true once "Time Elapsed:" appears
     private static volatile int     floor       = 0;       // 0 = unknown / not in catacombs
     private static volatile boolean masterMode  = false;
     private static volatile String  rawLocationLine = "";  // for diagnostics
@@ -90,16 +91,17 @@ public final class HypixelLocationDetector {
         }
 
         boolean nowInCata = false;
+        boolean nowDungeonRunning = false;
         int    nowFloor   = 0;
         boolean nowMaster = false;
         String  nowLine   = "";
         String  nowCoord  = "";
         if (nowInSb && sidebarObj != null) {
             List<String> rawLines = sidebarLines(sb, sidebarObj);
-            // Extract the room-coord stamp from line[0] (the top line on
-            // Hypixel SkyBlock — date + server id + coords). This works in
-            // ANY SkyBlock area, not just Catacombs; we just don't act on
-            // changes outside Catacombs.
+            // Top sidebar line carries the server room-change coord stamp.
+            // Present in EVERY SkyBlock area (hub, island, dungeon staging
+            // lobby AND dungeons proper) — do NOT use as a "dungeon active"
+            // signal. See `dungeonRunning` below for that.
             if (!rawLines.isEmpty()) {
                 String topClean = stripFormatting(rawLines.get(0));
                 Matcher cm = ROOM_COORD_PATTERN.matcher(topClean);
@@ -115,13 +117,23 @@ public final class HypixelLocationDetector {
                         nowMaster = m.group(1).equals("M");
                         try { nowFloor = Integer.parseInt(m.group(2)); } catch (NumberFormatException ignored) {}
                     }
-                    break;
+                }
+                // `Time Elapsed:` is the reliable "dungeon-actually-running"
+                // signal — Hypixel only adds that line to the sidebar after
+                // the 3-2-1 countdown ends and the player has been teleported
+                // to the real entrance room. The dungeon staging lobby
+                // (pre-countdown) shows the Catacombs name but NOT this line.
+                // `Keys:` works the same way; we accept either as a safety
+                // net in case Hypixel renames one.
+                if (clean.startsWith("Time Elapsed:") || clean.startsWith("Keys:")) {
+                    nowDungeonRunning = true;
                 }
             }
         }
 
         inSkyblock  = nowInSb;
         inCatacombs = nowInCata;
+        dungeonRunning = nowDungeonRunning;
         floor       = nowFloor;
         masterMode  = nowMaster;
         rawLocationLine = nowLine;
@@ -206,6 +218,7 @@ public final class HypixelLocationDetector {
     private static void reset() {
         inSkyblock = false;
         inCatacombs = false;
+        dungeonRunning = false;
         floor = 0;
         masterMode = false;
         rawLocationLine = "";
@@ -219,6 +232,8 @@ public final class HypixelLocationDetector {
 
     public static boolean inSkyblock()  { return inSkyblock; }
     public static boolean inCatacombs() { return inCatacombs; }
+    /** True only AFTER the 3-2-1 countdown has ended and Hypixel has put the player into the real dungeon — detected via `Time Elapsed:` / `Keys:` sidebar lines that don't exist in the pre-dungeon staging lobby. THIS is the right gate for world↔map calibration. */
+    public static boolean dungeonRunning() { return dungeonRunning; }
     public static int     floor()       { return floor; }
     public static boolean masterMode()  { return masterMode; }
     public static String  rawLocationLine() { return rawLocationLine; }

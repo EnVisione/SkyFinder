@@ -57,15 +57,24 @@ object SkyFinderCommands {
             .then(ClientCommandManager.literal("room")
                 .then(ClientCommandManager.literal("corner").executes { ctx -> runRoomCorner(ctx.source); 1 })
                 .then(ClientCommandManager.literal("info").executes { ctx -> runRoomInfo(ctx.source); 1 })
+                .then(ClientCommandManager.literal("recalibrate").executes { ctx -> runRoomRecalibrate(ctx.source); 1 })
             )
             .then(ClientCommandManager.literal("routes")
                 .then(ClientCommandManager.literal("count").executes { ctx -> runRoutesCount(ctx.source); 1 })
                 .then(ClientCommandManager.literal("dump").executes { ctx -> runRoutesDump(ctx.source); 1 })
                 .then(ClientCommandManager.literal("update").executes { ctx -> runRoutesUpdate(ctx.source); 1 })
             )
+            .then(ClientCommandManager.literal("route")
+                .then(ClientCommandManager.literal("show").executes { ctx -> runRouteShow(ctx.source, 0); 1 }
+                    .then(ClientCommandManager.argument("index", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0))
+                        .executes { ctx -> runRouteShow(ctx.source, com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "index")); 1 })
+                )
+                .then(ClientCommandManager.literal("clear").executes { ctx -> runRouteClear(ctx.source); 1 })
+                .then(ClientCommandManager.literal("legend").executes { ctx -> runRouteLegend(ctx.source); 1 })
+            )
             .executes { ctx ->
                 ctx.source.sendFeedback(Component.literal(
-                    "SkyFinder commands: /skyfinder status [raw] | data dump|stats|room <name> | map raw|grid|scan | room corner|info | routes count|dump|update"
+                    "SkyFinder commands: /skyfinder status [raw] | data dump|stats|room <name> | map raw|grid|scan | room corner|info|recalibrate | routes count|dump|update | route show [n]|clear|legend"
                 ).withStyle(ChatFormatting.AQUA))
                 1
             }
@@ -79,6 +88,7 @@ object SkyFinderCommands {
         source.sendFeedback(line("In Catacombs: ${flag(inCata)}"))
         if (inCata) {
             source.sendFeedback(line("Floor: ${HypixelLocationDetector.floorLabel()}"))
+            source.sendFeedback(line("Dungeon running (post-countdown): ${flag(HypixelLocationDetector.dungeonRunning())}"))
             source.sendFeedback(line("Sidebar line: \"${HypixelLocationDetector.rawLocationLine()}\""))
             source.sendFeedback(line("Room coord token: \"${HypixelLocationDetector.roomCoordToken()}\"  (change #${HypixelLocationDetector.roomChangeCounter()})"))
         } else if (!inSb) {
@@ -158,61 +168,118 @@ object SkyFinderCommands {
 
     private fun vec(v: IntArray): String = "(${v[0]},${v[1]},${v[2]})"
 
-    private fun runRoomInfo(source: FabricClientCommandSource) {
-        source.sendFeedback(header("SkyFinder Room Info"))
-        // Lazy-load skeletons on first call. Cheap after the initial scan.
-        if (!RoomSkeletonRegistry.isLoaded()) {
-            val n = RoomSkeletonRegistry.ensureLoaded()
-            source.sendFeedback(line("Loaded $n skeleton rooms (${RoomSkeletonRegistry.data().size} categories)."))
-        }
-        val t0 = System.nanoTime()
-        val result = DungeonRoomMatcher.identifyCurrentRoom()
-        val ms = (System.nanoTime() - t0) / 1_000_000.0
+    // ---------- /skyfinder route show / clear ----------
 
-        source.sendFeedback(line("Outcome: ${result.outcome}  (scanned ${result.blocksScanned} blocks in ${"%.1f".format(ms)}ms)"))
-        if (result.category != null) {
-            source.sendFeedback(line("Category: ${result.category}"))
-        }
-        when (result.outcome) {
-            DungeonRoomMatcher.Outcome.MATCHED -> {
-                source.sendFeedback(line("Room: ${result.roomName}   rotation=${result.rotation}"))
-                printSecrets(source, result.roomName)
-            }
-            DungeonRoomMatcher.Outcome.AMBIGUOUS -> {
-                source.sendFeedback(line("Best guess: ${result.roomName}  rotation=${result.rotation}  (${result.remainingCandidates} candidates remain)"))
-                source.sendFeedback(line("Top candidates:"))
-                result.debugTopCandidates.forEach { source.sendFeedback(line("  $it")) }
-                source.sendFeedback(line(""))
-                printSecrets(source, result.roomName)
-            }
-            DungeonRoomMatcher.Outcome.NO_CANDIDATES -> {
-                source.sendFeedback(line("No rooms matched. Possible causes:"))
-                source.sendFeedback(line("  - Map category mis-classified (decode race; retry in a sec)"))
-                source.sendFeedback(line("  - Room not in DRM dataset (139 rooms known; some new Hypixel rooms not covered)"))
-            }
-            DungeonRoomMatcher.Outcome.NOT_READY -> {
-                source.sendFeedback(line("Not ready. Debug info:"))
-                result.debugTopCandidates.forEach { source.sendFeedback(line("  $it")) }
-            }
-        }
+    private fun runRouteClear(source: FabricClientCommandSource) {
+        com.enviouse.skyfinder.client.render.SecretRouteRenderer.clear()
+        source.sendFeedback(line("Route cleared."))
     }
 
-    private fun printSecrets(source: FabricClientCommandSource, roomName: String?) {
-        if (roomName == null) return
-        val secrets = DungeonRoomCatalog.get().secretsFor(roomName)
-        if (secrets == null || secrets.isEmpty()) {
-            source.sendFeedback(line("Secrets: 0  (no entry in DRM secretlocations.json)"))
+    private fun runRoomRecalibrate(source: FabricClientCommandSource) {
+        com.enviouse.skyfinder.dungeon.DungeonMapDecoder.forceRecalibrate()
+        source.sendFeedback(line("World calibration cleared. Will re-snapshot on next map decode (must be in a confirmed dungeon room — roomChangeCounter >= 1)."))
+    }
+
+    private fun runRouteLegend(source: FabricClientCommandSource) {
+        source.sendFeedback(header("SkyFinder Route Legend"))
+        source.sendFeedback(line("§bCYAN§r line       — locations[] (movement path)"))
+        source.sendFeedback(line("§3TEAL§r box        — etherwarp / AOTV anchors"))
+        source.sendFeedback(line("§6ORANGE§r box      — mines (Superboom / Stonk blocks)"))
+        source.sendFeedback(line("§eYELLOW§r box      — interacts (right-click triggers)"))
+        source.sendFeedback(line("§cRED§r box         — TNT placements"))
+        source.sendFeedback(line("§dMAGENTA§r box     — enderpearl landing points"))
+        source.sendFeedback(line(""))
+        source.sendFeedback(line("Final-secret marker (pulsing double box):"))
+        source.sendFeedback(line("  §6chest§r = gold     §fitem§r = white    §eyellow§r = interact"))
+        source.sendFeedback(line("  §6stonk§r = chartreuse §6superboom§r = orange-red  §dpink§r = fairysoul"))
+        source.sendFeedback(line("  §agreen§r = entrance §2sea-green§r = exit"))
+    }
+
+    private fun runRouteShow(source: FabricClientCommandSource, index: Int) {
+        source.sendFeedback(header("SkyFinder Route Show"))
+        // 1. Identify the current room via the new BSD scanner.
+        val scanned = com.enviouse.skyfinder.deps.scanner.DungeonScanner.currentRoom
+        if (scanned == null || scanned.rotation == com.enviouse.skyfinder.deps.scanner.Rotations.NONE) {
+            source.sendFeedback(line("Scanner has no current room. Stand inside a dungeon room and try again."))
             return
         }
-        // Bucket by category for the count summary.
-        val byCat = secrets.groupBy { it.category().name.lowercase() }
-        val summary = byCat.entries.joinToString(", ") { "${it.value.size} ${it.key}" }
-        source.sendFeedback(line("Secrets: ${secrets.size}  ($summary)"))
-        // Each secret line shows its number, type, and room-local coords.
-        // Step E will translate these to world via roomLocalToWorld so the
-        // pathfinder can target them — for now we just dump them for verify.
-        secrets.forEachIndexed { idx, s ->
-            source.sendFeedback(line("  ${idx + 1}. ${s.secretName()}  [${s.category().name.lowercase()}]  local=(${s.x()}, ${s.y()}, ${s.z()})"))
+        val roomName = scanned.name
+        val rotation = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.rotationCode(scanned.rotation)
+        val corner = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.cornerOf(scanned)
+            ?: return source.sendFeedback(line("Scanner has no anchor corner."))
+
+        // 2. Look up routes for this room.
+        val routes = SecretRouteCatalog.get().routesFor(roomName)
+        if (routes.isEmpty()) {
+            source.sendFeedback(line("No routes recorded for $roomName."))
+            source.sendFeedback(line("(Zyra may not have routed this one yet.)"))
+            return
+        }
+        if (index < 0 || index >= routes.size) {
+            source.sendFeedback(line("Index $index out of range. Room has ${routes.size} route(s) (0..${routes.size - 1})."))
+            return
+        }
+        val r = routes[index]
+
+        // 3. Translate every waypoint chain from room-local → world Vec3s via
+        //    RoomRotationUtils.relativeToActual (BSD-3-Clause path).
+        fun chain(list: List<IntArray>): List<net.minecraft.world.phys.Vec3> = list.map { v ->
+            val pos = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.relativeToActual(
+                net.minecraft.core.BlockPos(v[0], v[1], v[2]), rotation, corner
+            )
+            net.minecraft.world.phys.Vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+        }
+
+        val presentation = com.enviouse.skyfinder.client.render.SecretRouteRenderer.RoutePresentation(
+            locations   = chain(r.locations()),
+            etherwarps  = chain(r.etherwarps()),
+            mines       = chain(r.mines()),
+            interacts   = chain(r.interacts()),
+            tnts        = chain(r.tnts()),
+            enderpearls = chain(r.enderpearls()),
+            secretGoal  = r.secretLocation()?.let { v ->
+                val pos = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.relativeToActual(
+                    net.minecraft.core.BlockPos(v[0], v[1], v[2]), rotation, corner
+                )
+                net.minecraft.world.phys.Vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+            },
+            secretType  = r.secretType(),
+            roomName    = roomName,
+        )
+        com.enviouse.skyfinder.client.render.SecretRouteRenderer.setPresentation(presentation)
+
+        source.sendFeedback(line("Showing route ${index + 1}/${routes.size} for $roomName  (rotation=$rotation)"))
+        source.sendFeedback(line("Secret: ${r.secretType().name.lowercase()}"))
+        source.sendFeedback(line("Counts: ${r.locations().size} locations, ${r.etherwarps().size} etherwarps, ${r.mines().size} mines, ${r.interacts().size} interacts, ${r.tnts().size} tnts, ${r.enderpearls().size} pearls"))
+        source.sendFeedback(line("Use /skyfinder route clear to hide it. Cycle alternates via /skyfinder route show <n>."))
+    }
+
+    private fun runRoomInfo(source: FabricClientCommandSource) {
+        source.sendFeedback(header("SkyFinder Room Info"))
+        source.sendFeedback(line("Scanner loaded: ${com.enviouse.skyfinder.deps.scanner.DungeonScanner.loadedRoomCount()} rooms (${com.enviouse.skyfinder.deps.scanner.DungeonScanner.loadedCoreCount()} cores)"))
+        val room = com.enviouse.skyfinder.deps.scanner.DungeonScanner.currentRoom
+        if (room == null) {
+            source.sendFeedback(line("Not in a recognized room. Either:"))
+            source.sendFeedback(line("  - not standing inside a dungeon tile yet (walk a step), OR"))
+            source.sendFeedback(line("  - this room's core hash isn't in rooms.json (new Hypixel room?)"))
+            return
+        }
+        source.sendFeedback(line("Room: §a${room.name}§r  type=${room.data.type()}  shape=${room.data.shape()}"))
+        source.sendFeedback(line("Rotation: ${com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.rotationCode(room.rotation)} (${room.rotation})"))
+        source.sendFeedback(line("Anchor corner (clayPos): (${room.clayPos.x}, ${room.clayPos.y}, ${room.clayPos.z})"))
+        source.sendFeedback(line("Components (${room.roomComponents.size}):"))
+        var i = 0
+        for (c in room.roomComponents) {
+            if (i < 6) source.sendFeedback(line("  - centre=(${c.x()}, ${c.z()})  core=${c.core()}"))
+            i++
+        }
+        if (room.data.secrets() > 0)
+            source.sendFeedback(line("rooms.json says: ${room.data.secrets()} secrets, ${room.data.crypts()} crypts"))
+        val routes = SecretRouteCatalog.get().routesFor(room.name)
+        if (routes.isNotEmpty()) {
+            source.sendFeedback(line("Routes recorded: ${routes.size}  (try /skyfinder route show 0)"))
+        } else {
+            source.sendFeedback(line("No SecretRoutes data for this room yet."))
         }
     }
 

@@ -35,18 +35,33 @@ public final class RoomSkeletonRegistry {
 
     private RoomSkeletonRegistry() {}
 
-    /** "1x1" → ("Cobble-Wall-Pillar-2" → long[]). Mirrors DRM's ROOM_DATA shape. */
+    /** "1x1" → ("cobble-wall-pillar-2" → long[]). Keys are ALWAYS lowercased to
+     *  match modern Minecraft's ResourceLocation rules (1.21.11 rejects uppercase
+     *  segments + spaces in resource paths — files on disk MUST be lowercase). The
+     *  DRM/SecretRoutes data files use mixed-case names like "Sloth-1", "Water Puzzle";
+     *  consumers should lowercase + replace spaces with hyphens when looking up here.
+     *  See {@link #canonical(String)}. */
     private static final Map<String, Map<String, long[]>> ROOM_DATA = new HashMap<>();
 
-    /** All known DRM category folders. Must match the directory names under skeletons/. */
+    /** All known DRM category folders. Must match the directory names under skeletons/
+     *  exactly. Note: lower-case + hyphen-only — Minecraft 1.21.11 ResourceLocation
+     *  rejects uppercase letters in path segments (Invalid segment 'L-shape'). */
     private static final String[] CATEGORIES = {
-        "1x1", "1x2", "1x3", "1x4", "2x2", "L-shape", "Puzzle", "Trap"
+        "1x1", "1x2", "1x3", "1x4", "2x2", "l-shape", "puzzle", "trap"
     };
 
     private static volatile boolean loaded = false;
 
     public static boolean isLoaded() { return loaded; }
     public static Map<String, Map<String, long[]>> data() { return ROOM_DATA; }
+
+    /** Lowercase + replace spaces with hyphens. Use this on any user-facing room
+     *  name (e.g. SecretRoutes "Water Puzzle") before looking it up in this registry
+     *  or {@link DungeonRoomMatcher}. */
+    public static String canonical(String roomName) {
+        if (roomName == null) return null;
+        return roomName.toLowerCase(java.util.Locale.ROOT).replace(' ', '-');
+    }
 
     /**
      * Idempotently load every .skeleton under the mod's assets. Safe to call

@@ -1,6 +1,10 @@
 {
   "schema": 1,
   "files": {
+    "rooms.json": {
+      "description": "Per-room core hashes + metadata for the BSD-3-Clause room detection scanner (odtheking, in SecretRoutes 1.21.10-fabric).",
+      "upstream": "https://github.com/yourboykyle/SecretRoutes/blob/main/src/main/resources/assets/secretroutesmod/rooms.json"
+    },
     "routes.json": {
       "description": "Per-room secret routes recorded by Zyra et al. Forked from yourboykyle/SecretRoutes (GPL-3.0).",
       "upstream": "https://raw.githubusercontent.com/yourboykyle/SecretRoutes/main/routes.json"

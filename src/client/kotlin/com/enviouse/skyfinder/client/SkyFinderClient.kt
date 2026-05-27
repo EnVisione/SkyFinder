@@ -65,6 +65,10 @@ class SkyFinderClient : ClientModInitializer {
         log.info("SkyFinder initializing")
         SkyFinderCommands.register()
 
+        // Register the new BSD-3-Clause room scanner (odtheking/SecretRoutes).
+        // It self-registers ClientTickEvents + ClientPlayConnectionEvents.
+        com.enviouse.skyfinder.deps.scanner.DungeonScanner.init()
+
         // Reset cached map id on world disconnect so the next dungeon entry
         // scans fresh. Without this we'd cling to the previous run's MapId,
         // which would either silently return stale colours or fail silently
@@ -141,6 +145,16 @@ class SkyFinderClient : ClientModInitializer {
             val pr = pathRenderer ?: return@Renderer
             LineDrawer.draw3D(context) {
                 pr.render(context, this)
+            }
+        })
+
+        // Secret-route renderer (Step B). Independently active — even with
+        // showPath OFF, route waypoints + boxes render so the player can
+        // glance at where the next secret is without a path line cluttering
+        // their view.
+        SkyFinderRenderDispatcher.register(SkyFinderRenderDispatcher.Renderer { context ->
+            LineDrawer.draw3D(context, lineWidth = 4f) {
+                com.enviouse.skyfinder.client.render.SecretRouteRenderer.render(context, this)
             }
         })
     }

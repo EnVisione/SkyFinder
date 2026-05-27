@@ -377,14 +377,39 @@ public final class DungeonMapDecoder {
      * the entrance room (Hypixel spawns you there). Snapshotting that frame's
      * world NW is correct.
      */
+    /**
+     * Snapshot the calibration anchor.
+     *
+     * **Gated on `HypixelLocationDetector.dungeonRunning()`** — true only
+     * AFTER the 3-2-1 countdown ends and the player is teleported into the
+     * real entrance room. Detected via the `Time Elapsed:` / `Keys:`
+     * sidebar lines which Hypixel only emits once the dungeon is genuinely
+     * running.
+     *
+     * History of this gate:
+     *   - v1 used `inCatacombs` directly → fired during countdown while
+     *     player was still in the staging lobby → 32-block Z offset.
+     *   - v2 used `roomChangeCounter >= 1` → the top-line `X,Z` coord
+     *     stamp updates DURING the lobby too (it's a SkyBlock-wide thing,
+     *     not Catacombs-only), so the gate fired too early — same bug.
+     *   - v3 (now) uses `dungeonRunning()` which only flips true once
+     *     `Time Elapsed:` or `Keys:` appears in the sidebar. Those lines
+     *     are dungeon-exclusive, post-countdown, and reliable.
+     */
     public static void tryCalibrate(EntranceCorners e) {
         if (isCalibrated() || e == null) return;
-        if (!HypixelLocationDetector.inCatacombs()) return;
+        if (!HypixelLocationDetector.dungeonRunning()) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
         long[] nw = worldNwCorner(mc.player.getX(), mc.player.getZ());
         calibEntranceWorldNwX = nw[0];
         calibEntranceWorldNwZ = nw[1];
+    }
+
+    /** Force a fresh calibration on the next decode. Use after a misfire (e.g. lobby-preview race). */
+    public static void forceRecalibrate() {
+        calibEntranceWorldNwX = Long.MIN_VALUE;
+        calibEntranceWorldNwZ = Long.MIN_VALUE;
     }
 
     /**
