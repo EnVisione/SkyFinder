@@ -105,38 +105,41 @@ object SecretRouteRenderer {
         if (renderLocations && p.locations.size >= 2) {
             drawer.drawPath(p.locations, LOCATIONS_COLOR)
         }
+        // Waypoint boxes: SecretRoutes draws an EXACT one-block outline from
+        // the block's integer NW corner to NW+(1,1,1). The Vec3 we receive
+        // is already that integer corner (no +0.5 added — see commands.kt).
         if (renderEtherwarps) {
-            for (v in p.etherwarps) drawBox(drawer, v, 0.6, ETHERWARP_COLOR)
+            for (v in p.etherwarps) drawBlockOutline(drawer, v, ETHERWARP_COLOR)
         }
         if (renderMines) {
-            for (v in p.mines) drawBox(drawer, v, 0.55, MINES_COLOR)
+            for (v in p.mines) drawBlockOutline(drawer, v, MINES_COLOR)
         }
         if (renderInteracts) {
-            for (v in p.interacts) drawBox(drawer, v, 0.55, INTERACT_COLOR)
+            for (v in p.interacts) drawBlockOutline(drawer, v, INTERACT_COLOR)
         }
         if (renderTnts) {
-            for (v in p.tnts) drawBox(drawer, v, 0.6, TNT_COLOR)
+            for (v in p.tnts) drawBlockOutline(drawer, v, TNT_COLOR)
         }
         if (renderEnderpearls) {
-            for (v in p.enderpearls) drawBox(drawer, v, 0.55, ENDERPEARL_COLOR)
+            for (v in p.enderpearls) drawBlockOutline(drawer, v, ENDERPEARL_COLOR)
         }
         if (renderSecretGoal && p.secretGoal != null) {
             val base = secretColorFor(p.secretType)
             val pulsed = Color(base.red, base.green, base.blue, pulseAlpha())
-            drawBox(drawer, p.secretGoal, 0.75, pulsed)
-            drawBox(drawer, p.secretGoal, 0.78, pulsed) // double outline = "this is the goal"
+            drawBlockOutline(drawer, p.secretGoal, pulsed)
         }
     }
 
     /**
-     * Draw a hollow axis-aligned box centered on `center` with half-extent
-     * `r` along every axis. 12 line segments — same primitive SkyHanni uses
-     * for waypoint markers.
+     * Draw a hollow 1x1x1 block outline whose NW-bottom corner is `corner`
+     * (an integer block position passed as a Vec3 — x.0, y.0, z.0). This
+     * matches SecretRoutes' `RenderTypes.OutlinedBox`: from `(x, y, z)` to
+     * `(x+1, y+1, z+1)`, perfectly outlining the single block at that pos.
      */
-    private fun drawBox(drawer: LineDrawer, center: Vec3, r: Double, color: Color) {
-        val x0 = center.x - r; val x1 = center.x + r
-        val y0 = center.y - r; val y1 = center.y + r
-        val z0 = center.z - r; val z1 = center.z + r
+    private fun drawBlockOutline(drawer: LineDrawer, corner: Vec3, color: Color) {
+        val x0 = corner.x;       val x1 = corner.x + 1.0
+        val y0 = corner.y;       val y1 = corner.y + 1.0
+        val z0 = corner.z;       val z1 = corner.z + 1.0
         // 4 bottom edges
         drawer.draw3DLine(Vec3(x0, y0, z0), Vec3(x1, y0, z0), color)
         drawer.draw3DLine(Vec3(x1, y0, z0), Vec3(x1, y0, z1), color)

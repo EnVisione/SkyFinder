@@ -223,26 +223,33 @@ object SkyFinderCommands {
 
         // 3. Translate every waypoint chain from room-local → world Vec3s via
         //    RoomRotationUtils.relativeToActual (BSD-3-Clause path).
-        fun chain(list: List<IntArray>): List<net.minecraft.world.phys.Vec3> = list.map { v ->
+        //    Boxes (etherwarps/mines/interacts/tnts/enderpearls/secret-goal)
+        //    use the raw INTEGER block corner — SecretRoutes renders a 1x1x1
+        //    box from (x,y,z) to (x+1,y+1,z+1), which is the block's outline.
+        //    `locations[]` is a PATH and uses block centers (+0.5).
+        fun cornerVec(v: IntArray): net.minecraft.world.phys.Vec3 {
             val pos = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.relativeToActual(
                 net.minecraft.core.BlockPos(v[0], v[1], v[2]), rotation, corner
             )
-            net.minecraft.world.phys.Vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+            return net.minecraft.world.phys.Vec3(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())
         }
+        fun centerVec(v: IntArray): net.minecraft.world.phys.Vec3 {
+            val pos = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.relativeToActual(
+                net.minecraft.core.BlockPos(v[0], v[1], v[2]), rotation, corner
+            )
+            return net.minecraft.world.phys.Vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+        }
+        fun cornerChain(list: List<IntArray>): List<net.minecraft.world.phys.Vec3> = list.map(::cornerVec)
+        fun centerChain(list: List<IntArray>): List<net.minecraft.world.phys.Vec3> = list.map(::centerVec)
 
         val presentation = com.enviouse.skyfinder.client.render.SecretRouteRenderer.RoutePresentation(
-            locations   = chain(r.locations()),
-            etherwarps  = chain(r.etherwarps()),
-            mines       = chain(r.mines()),
-            interacts   = chain(r.interacts()),
-            tnts        = chain(r.tnts()),
-            enderpearls = chain(r.enderpearls()),
-            secretGoal  = r.secretLocation()?.let { v ->
-                val pos = com.enviouse.skyfinder.deps.scanner.RoomRotationUtils.relativeToActual(
-                    net.minecraft.core.BlockPos(v[0], v[1], v[2]), rotation, corner
-                )
-                net.minecraft.world.phys.Vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
-            },
+            locations   = centerChain(r.locations()),   // path through block centers
+            etherwarps  = cornerChain(r.etherwarps()),  // 1-block box at integer corner
+            mines       = cornerChain(r.mines()),
+            interacts   = cornerChain(r.interacts()),
+            tnts        = cornerChain(r.tnts()),
+            enderpearls = cornerChain(r.enderpearls()),
+            secretGoal  = r.secretLocation()?.let(::cornerVec),
             secretType  = r.secretType(),
             roomName    = roomName,
         )
