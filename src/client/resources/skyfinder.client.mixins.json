@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.enviouse.skyfinder.mixin.client",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinLevelRenderer"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

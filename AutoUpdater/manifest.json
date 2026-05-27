@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "files": {
+    "routes.json": {
+      "description": "Per-room secret routes recorded by Zyra et al. Forked from yourboykyle/SecretRoutes (GPL-3.0).",
+      "upstream": "https://raw.githubusercontent.com/yourboykyle/SecretRoutes/main/routes.json"
+    },
+    "pearlroutes.json": {
+      "description": "Per-room enderpearl routes. Forked from yourboykyle/SecretRoutes (GPL-3.0).",
+      "upstream": "https://raw.githubusercontent.com/yourboykyle/SecretRoutes/main/pearlroutes.json"
+    }
+  }
+}

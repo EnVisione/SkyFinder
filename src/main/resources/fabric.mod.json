@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "skyfinder",
+  "version": "${version}",
+
+  "name": "SkyFinder",
+  "description": "Smooth dungeon secret pathing for Hypixel SkyBlock.",
+  "authors": ["enviouse"],
+  "contact": {},
+
+  "license": "LGPL-3.0-or-later",
+  "icon": "assets/skyfinder/icon.png",
+
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      {
+        "value": "com.enviouse.skyfinder.client.SkyFinderClient",
+        "adapter": "kotlin"
+      }
+    ],
+    "main": ["com.enviouse.skyfinder.Skyfinder"]
+  },
+
+  "mixins": [
+    "skyfinder.mixins.json"
+    ,{
+      "config": "skyfinder.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "fabric-language-kotlin": ">=1.13.0",
+    "minecraft": "${minecraft_version}"
+  }
+}
