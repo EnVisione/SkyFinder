@@ -69,6 +69,11 @@ class SkyFinderClient : ClientModInitializer {
         // It self-registers ClientTickEvents + ClientPlayConnectionEvents.
         com.enviouse.skyfinder.deps.scanner.DungeonScanner.init()
 
+        // Auto-advancing route playback. Subscribes to client tick (room
+        // change + BAT proximity + ITEM pickup) and UseBlockCallback
+        // (INTERACT/CHEST right-click).
+        com.enviouse.skyfinder.client.playback.RoutePlayback.init()
+
         // Reset cached map id on world disconnect so the next dungeon entry
         // scans fresh. Without this we'd cling to the previous run's MapId,
         // which would either silently return stale colours or fail silently

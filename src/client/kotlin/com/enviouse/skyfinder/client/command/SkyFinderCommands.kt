@@ -71,10 +71,14 @@ object SkyFinderCommands {
                 )
                 .then(ClientCommandManager.literal("clear").executes { ctx -> runRouteClear(ctx.source); 1 })
                 .then(ClientCommandManager.literal("legend").executes { ctx -> runRouteLegend(ctx.source); 1 })
+                .then(ClientCommandManager.literal("next").executes { ctx -> runRouteNext(ctx.source); 1 })
+                .then(ClientCommandManager.literal("back").executes { ctx -> runRouteBack(ctx.source); 1 })
+                .then(ClientCommandManager.literal("status").executes { ctx -> runRouteStatus(ctx.source); 1 })
+                .then(ClientCommandManager.literal("toggle").executes { ctx -> runRouteToggle(ctx.source); 1 })
             )
             .executes { ctx ->
                 ctx.source.sendFeedback(Component.literal(
-                    "SkyFinder commands: /skyfinder status [raw] | data dump|stats|room <name> | map raw|grid|scan | room corner|info|recalibrate | routes count|dump|update | route show [n]|clear|legend"
+                    "SkyFinder commands: /skyfinder status [raw] | data dump|stats|room <name> | map raw|grid|scan | room corner|info|recalibrate | routes count|dump|update | route show [n]|clear|legend|next|back|status|toggle"
                 ).withStyle(ChatFormatting.AQUA))
                 1
             }
@@ -173,6 +177,35 @@ object SkyFinderCommands {
     private fun runRouteClear(source: FabricClientCommandSource) {
         com.enviouse.skyfinder.client.render.SecretRouteRenderer.clear()
         source.sendFeedback(line("Route cleared."))
+    }
+
+    private fun runRouteNext(source: FabricClientCommandSource) {
+        com.enviouse.skyfinder.client.playback.RoutePlayback.manualAdvance()
+        source.sendFeedback(line("→ next secret  (index now ${com.enviouse.skyfinder.client.playback.RoutePlayback.currentSecretIndex() + 1}/${com.enviouse.skyfinder.client.playback.RoutePlayback.currentRouteSecretCount()})"))
+    }
+
+    private fun runRouteBack(source: FabricClientCommandSource) {
+        com.enviouse.skyfinder.client.playback.RoutePlayback.manualBack()
+        source.sendFeedback(line("← prev secret  (index now ${com.enviouse.skyfinder.client.playback.RoutePlayback.currentSecretIndex() + 1}/${com.enviouse.skyfinder.client.playback.RoutePlayback.currentRouteSecretCount()})"))
+    }
+
+    private fun runRouteToggle(source: FabricClientCommandSource) {
+        val now = !com.enviouse.skyfinder.client.playback.RoutePlayback.isEnabled()
+        com.enviouse.skyfinder.client.playback.RoutePlayback.setEnabled(now)
+        source.sendFeedback(line("Auto-advance playback ${if (now) "§aENABLED§r" else "§cDISABLED§r"}"))
+    }
+
+    private fun runRouteStatus(source: FabricClientCommandSource) {
+        source.sendFeedback(header("SkyFinder Route Status"))
+        source.sendFeedback(line("Auto-advance: ${if (com.enviouse.skyfinder.client.playback.RoutePlayback.isEnabled()) "§aENABLED§r" else "§cDISABLED§r"}"))
+        source.sendFeedback(line("Active room: ${com.enviouse.skyfinder.client.playback.RoutePlayback.currentRoomNameOrNull() ?: "<none>"}"))
+        val total = com.enviouse.skyfinder.client.playback.RoutePlayback.currentRouteSecretCount()
+        if (total > 0) {
+            source.sendFeedback(line("Secret: ${com.enviouse.skyfinder.client.playback.RoutePlayback.currentSecretIndex() + 1}/${total}"))
+        } else {
+            source.sendFeedback(line("No routes loaded for current room."))
+        }
+        source.sendFeedback(line("Triggers: BAT (±3 blocks), ITEM (pickup within ±10), INTERACT/CHEST/WITHER (right-click)"))
     }
 
     private fun runRoomRecalibrate(source: FabricClientCommandSource) {
