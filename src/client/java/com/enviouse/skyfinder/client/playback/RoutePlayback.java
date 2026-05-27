@@ -47,6 +47,7 @@ import com.enviouse.skyfinder.deps.scanner.Rotations;
 import com.enviouse.skyfinder.dungeon.HypixelLocationDetector;
 import com.enviouse.skyfinder.dungeon.SecretRouteCatalog;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.event.client.player.ClientPlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -89,6 +90,25 @@ public final class RoutePlayback {
     private static volatile int currentSecretIndex = 0;
     private static volatile boolean enabled = true;
 
+    // ============================================================
+    // Sub-waypoint sequencer (the "one outline at a time" feature)
+    //
+    // Per the spec from Leo: within a single secret, show ONLY the next
+    // actionable waypoint as an outline. Order = furthest-from-secret-block
+    // first, walking inward, secret block itself last. `locations[]` is NOT
+    // in this queue — it's purely a path-shape hint for the bezier renderer.
+    //
+    // Trigger rules (Leo, 2026-05-27):
+    //   etherwarp  → player on/near (proximity ±2)
+    //   mine       → block at that pos broken (ClientPlayerBlockBreakEvents)
+    //   tnt        → block(s) near broken (±3 of TNT marker) — Superboom destroys nearby
+    //   enderpearl → player near landing pos (proximity ±2)
+    //   interact   → right-click at exact pos (handled by UseBlockCallback)
+    //   secret final → existing per-secret triggers (BAT proximity / ITEM
+    //                  pickup / INTERACT click on the goal block)
+    // ============================================================
+    private static final java.util.Deque<SubWaypoint> subQueue = new java.util.ArrayDeque<>();
+
     /** 5-tick interval matches SR's OnItemPickedUp throttling. */
     private static int itemCheckTick = 0;
     private static final Map<String, Integer> prevInventory = new HashMap<>();
@@ -108,6 +128,17 @@ public final class RoutePlayback {
             onUseBlock(hitResult.getBlockPos());
             return InteractionResult.PASS;
         });
+        ClientPlayerBlockBreakEvents.AFTER.register((level, player, pos, state) -> onBlockBroken(pos));
+    }
+
+    /** One step in the per-secret sub-waypoint sequence. */
+    private static final class SubWaypoint {
+        final SecretRouteRenderer.WaypointType type;
+        final BlockPos worldPos; // integer block corner
+        SubWaypoint(SecretRouteRenderer.WaypointType type, BlockPos worldPos) {
+            this.type = type;
+            this.worldPos = worldPos;
+        }
     }
 
     public static void setEnabled(boolean on) { enabled = on; if (!on) SecretRouteRenderer.INSTANCE.clear(); }
@@ -136,7 +167,6 @@ public final class RoutePlayback {
         if (!enabled) return;
         if (mc.player == null || mc.level == null) return;
         if (!HypixelLocationDetector.inCatacombs()) {
-            // Leaving the dungeon clears playback state.
             if (currentRoomName.get() != null) clearAll();
             return;
         }
@@ -145,34 +175,77 @@ public final class RoutePlayback {
         if (scanned == null || scanned.rotation == Rotations.NONE) return;
 
         String name = scanned.getName();
-        // Room change → load that room's routes at index 0, secret 0.
         if (!name.equals(lastEnteredRoomName)) {
             lastEnteredRoomName = name;
             loadRoom(name);
-            return; // wait one tick before checking triggers in the new room
+            return;
         }
 
-        // Trigger checks for the CURRENT secret only.
         SecretRouteCatalog.SecretRoute cur = currentRoute();
         if (cur == null) return;
+
+        BlockPos playerPos = mc.player.blockPosition();
+
+        // === Sub-waypoint sequencer (priority) ===
+        // If we have intermediate waypoints queued, check proximity-based
+        // triggers on the head. Walk-by (etherwarp / enderpearl): ±2 cube.
+        // Mines and TNT are block-break events, handled separately.
+        SubWaypoint head = subQueue.peekFirst();
+        if (head != null) {
+            switch (head.type) {
+                case ETHERWARP, ENDERPEARL -> {
+                    if (within(playerPos, head.worldPos, 2)) {
+                        consumeSubWaypoint("walked onto " + head.type);
+                    }
+                }
+                // MINE / TNT — wait for block-break event
+                // INTERACT — wait for right-click
+                default -> { /* no tick-based trigger */ }
+            }
+            return; // don't fall through to per-secret trigger while sub-waypoints remain
+        }
+
+        // === Per-secret final triggers (only when subQueue is empty) ===
         SecretRouteCatalog.SecretType type = cur.secretType();
         int[] localGoal = cur.secretLocation();
         if (localGoal == null) return;
         BlockPos worldGoal = roomLocalToWorld(localGoal, scanned);
         if (worldGoal == null) return;
 
-        BlockPos playerPos = mc.player.blockPosition();
-
         switch (type) {
             case BAT -> {
                 if (within(playerPos, worldGoal, 3)) advance("BAT proximity at " + worldGoal);
             }
             case ITEM -> tickItemDetect(mc.player, worldGoal);
-            // INTERACT / CHEST / WITHER handled by onUseBlock
-            // (and WITHER additionally fires on the chat door-open event,
-            //  which is wired separately)
-            default -> { /* manual advance only */ }
+            default -> { /* manual or right-click handled elsewhere */ }
         }
+    }
+
+    /** Handles BlockBreak events for MINE / TNT sub-waypoints. */
+    private static void onBlockBroken(BlockPos pos) {
+        if (!enabled) return;
+        if (!HypixelLocationDetector.inCatacombs()) return;
+        SubWaypoint head = subQueue.peekFirst();
+        if (head == null) return;
+        switch (head.type) {
+            case MINE -> {
+                if (pos.equals(head.worldPos)) consumeSubWaypoint("mined " + pos);
+            }
+            case TNT -> {
+                // Superboom/Stonk obliterates blocks within ~3 of the placement
+                // point. We accept any break within ±3 of the recorded TNT pos
+                // as "the TNT did its job".
+                if (within(pos, head.worldPos, 3)) consumeSubWaypoint("TNT-area break near " + head.worldPos);
+            }
+            default -> { /* nothing */ }
+        }
+    }
+
+    /** Pop the head of the sub-queue + refresh the renderer. */
+    private static void consumeSubWaypoint(String reason) {
+        subQueue.pollFirst();
+        playChime();
+        refreshRenderer();
     }
 
     private static void tickItemDetect(LocalPlayer player, BlockPos worldGoal) {
@@ -217,7 +290,6 @@ public final class RoutePlayback {
     private static void onUseBlock(BlockPos pos) {
         if (!enabled) return;
         if (!HypixelLocationDetector.inCatacombs()) return;
-        // Debounce repeat fires on the same block.
         long now = System.currentTimeMillis();
         if (lastInteractPos != null && lastInteractPos.equals(pos) && (now - lastInteractMs) < INTERACT_DEBOUNCE_MS) return;
         lastInteractMs = now;
@@ -232,9 +304,21 @@ public final class RoutePlayback {
         if (scanned == null || scanned.rotation == Rotations.NONE) return;
         SecretRouteCatalog.SecretRoute cur = currentRoute();
         if (cur == null) return;
+
+        // (1) Sub-waypoint INTERACT trigger: if the head of the sub-queue is
+        // an INTERACT type at this exact pos, consume it and stop.
+        SubWaypoint head = subQueue.peekFirst();
+        if (head != null && head.type == SecretRouteRenderer.WaypointType.INTERACT
+            && pos.equals(head.worldPos)) {
+            consumeSubWaypoint("right-clicked interact " + pos);
+            return;
+        }
+
+        // (2) Per-secret final trigger: INTERACT/CHEST/WITHER click on the
+        // secret's exact world block (only when subQueue is empty so we know
+        // we're at the "go for the secret" stage).
+        if (!subQueue.isEmpty()) return;
         SecretRouteCatalog.SecretType type = cur.secretType();
-        // INTERACT (lever / head / skull) and CHEST (chest/trapped_chest) both
-        // advance on a click on the secret's exact world block.
         if (type != SecretRouteCatalog.SecretType.INTERACT
             && type != SecretRouteCatalog.SecretType.CHEST
             && type != SecretRouteCatalog.SecretType.WITHER) return;
@@ -259,12 +343,14 @@ public final class RoutePlayback {
         currentRoomRoutes.set(routes);
         currentRouteIndex = 0;
         currentSecretIndex = 0;
-        prevInventory.clear();  // baseline inventory for ITEM detection
+        subQueue.clear();
+        prevInventory.clear();
         if (routes == null || routes.isEmpty()) {
             SecretRouteRenderer.INSTANCE.clear();
             return;
         }
-        showCurrent();
+        rebuildSubQueueForCurrent();
+        refreshRenderer();
     }
 
     /** "Current secret" = currentRouteIndex'th route in the room. */
@@ -281,10 +367,13 @@ public final class RoutePlayback {
         if (currentRouteIndex < rs.size() - 1) {
             currentRouteIndex++;
             currentSecretIndex = currentRouteIndex;
-            showCurrent();
+            subQueue.clear();
+            rebuildSubQueueForCurrent();
+            refreshRenderer();
             playChime();
         } else {
             // Last secret done — clear render so we don't keep highlighting it.
+            subQueue.clear();
             SecretRouteRenderer.INSTANCE.clear();
         }
     }
@@ -295,14 +384,12 @@ public final class RoutePlayback {
         if (currentRouteIndex > 0) {
             currentRouteIndex--;
             currentSecretIndex = currentRouteIndex;
-            showCurrent();
+            subQueue.clear();
+            rebuildSubQueueForCurrent();
+            refreshRenderer();
         }
     }
 
-    /** Cycle to a different ALTERNATE route for the current secret slot.
-     *  Currently no-op because we model each entry in `routesFor(room)` as
-     *  the sequence of secrets, not as alternate routes for a single secret.
-     *  Upstream SR's data is structured the same way. */
     public static void cycleAlternate() { /* no alternates in this data model */ }
 
     private static void clearAll() {
@@ -311,13 +398,64 @@ public final class RoutePlayback {
         currentRouteIndex = 0;
         currentSecretIndex = 0;
         lastEnteredRoomName = null;
+        subQueue.clear();
         prevInventory.clear();
         SecretRouteRenderer.INSTANCE.clear();
     }
 
-    private static void showCurrent() {
+    /**
+     * Build the sub-waypoint queue for the current secret.
+     *
+     * Order rule (Leo, 2026-05-27): furthest-from-secret-block first, walking
+     * inward, secret block itself last. Combines etherwarps + mines + interacts
+     * + tnts + enderpearls into a single distance-sorted queue. `locations[]`
+     * is NOT in this queue (path-shape hint only for the bezier renderer).
+     */
+    private static void rebuildSubQueueForCurrent() {
+        subQueue.clear();
+        SecretRouteCatalog.SecretRoute r = currentRoute();
+        if (r == null) return;
         DungeonRoom scanned = DungeonScanner.currentRoom;
         if (scanned == null || scanned.rotation == Rotations.NONE) return;
+        String rotation = RoomRotationUtils.rotationCode(scanned.rotation);
+        Point corner = RoomRotationUtils.cornerOf(scanned);
+        if (corner == null) return;
+
+        int[] localGoal = r.secretLocation();
+        if (localGoal == null) return;
+        BlockPos worldGoal = RoomRotationUtils.relativeToActual(
+            new BlockPos(localGoal[0], localGoal[1], localGoal[2]), rotation, corner);
+
+        java.util.List<SubWaypoint> all = new java.util.ArrayList<>();
+        for (int[] v : r.etherwarps())  all.add(new SubWaypoint(SecretRouteRenderer.WaypointType.ETHERWARP,
+            RoomRotationUtils.relativeToActual(new BlockPos(v[0], v[1], v[2]), rotation, corner)));
+        for (int[] v : r.mines())       all.add(new SubWaypoint(SecretRouteRenderer.WaypointType.MINE,
+            RoomRotationUtils.relativeToActual(new BlockPos(v[0], v[1], v[2]), rotation, corner)));
+        for (int[] v : r.interacts())   all.add(new SubWaypoint(SecretRouteRenderer.WaypointType.INTERACT,
+            RoomRotationUtils.relativeToActual(new BlockPos(v[0], v[1], v[2]), rotation, corner)));
+        for (int[] v : r.tnts())        all.add(new SubWaypoint(SecretRouteRenderer.WaypointType.TNT,
+            RoomRotationUtils.relativeToActual(new BlockPos(v[0], v[1], v[2]), rotation, corner)));
+        for (int[] v : r.enderpearls()) all.add(new SubWaypoint(SecretRouteRenderer.WaypointType.ENDERPEARL,
+            RoomRotationUtils.relativeToActual(new BlockPos(v[0], v[1], v[2]), rotation, corner)));
+
+        // Sort descending by distance from the secret block. Furthest first.
+        all.sort((a, b) -> Double.compare(distSq(b.worldPos, worldGoal), distSq(a.worldPos, worldGoal)));
+        subQueue.addAll(all);
+    }
+
+    private static double distSq(BlockPos a, BlockPos b) {
+        double dx = a.getX() - b.getX();
+        double dy = a.getY() - b.getY();
+        double dz = a.getZ() - b.getZ();
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    /** Push the current state to the renderer. Active = head of sub-queue,
+     *  or null if all sub-waypoints are done (then the renderer falls back
+     *  to highlighting the pulsing secret-goal block). */
+    private static void refreshRenderer() {
+        DungeonRoom scanned = DungeonScanner.currentRoom;
+        if (scanned == null || scanned.rotation == Rotations.NONE) { SecretRouteRenderer.INSTANCE.clear(); return; }
         SecretRouteCatalog.SecretRoute r = currentRoute();
         if (r == null) { SecretRouteRenderer.INSTANCE.clear(); return; }
 
@@ -325,24 +463,29 @@ public final class RoutePlayback {
         Point corner = RoomRotationUtils.cornerOf(scanned);
         if (corner == null) return;
 
+        // locations[] — path-shape hint for the bezier (block centers).
         java.util.List<Vec3> locations = new java.util.ArrayList<>();
         for (int[] v : r.locations()) locations.add(centerVec(v, rotation, corner));
-        java.util.List<Vec3> etherwarps = new java.util.ArrayList<>();
-        for (int[] v : r.etherwarps()) etherwarps.add(cornerVec(v, rotation, corner));
-        java.util.List<Vec3> mines = new java.util.ArrayList<>();
-        for (int[] v : r.mines()) mines.add(cornerVec(v, rotation, corner));
-        java.util.List<Vec3> interacts = new java.util.ArrayList<>();
-        for (int[] v : r.interacts()) interacts.add(cornerVec(v, rotation, corner));
-        java.util.List<Vec3> tnts = new java.util.ArrayList<>();
-        for (int[] v : r.tnts()) tnts.add(cornerVec(v, rotation, corner));
-        java.util.List<Vec3> pearls = new java.util.ArrayList<>();
-        for (int[] v : r.enderpearls()) pearls.add(cornerVec(v, rotation, corner));
 
         Vec3 goal = r.secretLocation() != null ? cornerVec(r.secretLocation(), rotation, corner) : null;
 
+        SubWaypoint head = subQueue.peekFirst();
+        Vec3 activeWaypoint = null;
+        SecretRouteRenderer.WaypointType activeType = SecretRouteRenderer.WaypointType.NONE;
+        if (head != null) {
+            activeWaypoint = new Vec3(head.worldPos.getX(), head.worldPos.getY(), head.worldPos.getZ());
+            activeType = head.type;
+        }
+
         SecretRouteRenderer.INSTANCE.setPresentation(new SecretRouteRenderer.RoutePresentation(
-            locations, etherwarps, mines, interacts, tnts, pearls,
-            goal, r.secretType(), currentRoomName.get()
+            locations,
+            java.util.Collections.emptyList(),
+            java.util.Collections.emptyList(),
+            java.util.Collections.emptyList(),
+            java.util.Collections.emptyList(),
+            java.util.Collections.emptyList(),
+            goal, r.secretType(), currentRoomName.get(),
+            activeWaypoint, activeType
         ));
     }
 
